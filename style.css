@@ -1,0 +1,59 @@
+/* =========================================================
+   TEMA UNIFICADO - DATAWAVES OPTIMIZER 2D MULTI-CHAPA
+   ========================================================= */
+
+:root {
+    --dw-accent: #b35500;
+    --dw-accent-light: #e06b00;
+    --dw-accent-hover: rgba(179, 85, 0, 0.15);
+    --dw-bg-main: #121217;
+    --dw-header: #141419;
+    --dw-bg-card: #1d1d24;
+    --dw-bg-input: #23232c;
+    --dw-border: #2a2a36;
+    --dw-text-main: #c2c2d0;
+}
+
+html, body {
+    background-color: var(--dw-bg-main) !important;
+    color: var(--dw-text-main) !important;
+    font-family: system-ui, -apple-system, sans-serif;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+.form-control, select, input {
+    background-color: var(--dw-bg-input) !important;
+    color: var(--dw-text-main) !important;
+    border: 1px solid #333342 !important;
+    padding: 8px 10px;
+    border-radius: 4px;
+    outline: none;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+input::placeholder {
+    color: #616170 !important;
+}
+
+.card {
+    background-color: var(--dw-bg-card) !important;
+    border: 1px solid var(--dw-border) !important;
+}
+
+/* =========================================================
+   ESTILOS DE IMPRESIÓN FORMATO A4 AISLADO
+   ========================================================= */
+@media print {
+    @page { size: A4 landscape; margin: 10mm; }
+    body { background: #ffffff !important; color: #000000 !important; }
+    header, .card:not(#results-card), #btn-optimize, #btn-add-sheet, #sheets-tabs-container, button { display: none !important; }
+    #results-card { border: none !important; background: #ffffff !important; padding: 0 !important; margin: 0 !important; }
+    #results-card * { color: #000000 !important; }
+    .program-card { background: #ffffff !important; border: 1px solid #000000 !important; page-break-after: always; margin-bottom: 0 !important; padding: 10px !important; box-shadow: none !important; }
+    svg { background: #f0f0f5 !important; border: 2px solid #000000 !important; }
+    table { border: 1px solid #000000 !important; }
+    th, td { border: 1px solid #000000 !important; color: #000000 !important; }
+}
