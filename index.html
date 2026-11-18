@@ -158,9 +158,61 @@
             color: #ff4d4d;
             background: rgba(255, 77, 77, 0.15);
         }
+
+        /* INTERACCIÓN PIEZAS SVG Y MENÚ CONTEXTUAL */
+        .draggable-part {
+            cursor: grab;
+        }
+        .draggable-part:hover rect {
+            stroke: #ffffff !important;
+            stroke-width: 2.5px !important;
+        }
+        .sheet-svg-canvas {
+            user-select: none;
+            touch-action: none;
+        }
+        #part-context-menu {
+            position: fixed;
+            display: none;
+            background-color: #1d1d26;
+            border: 1px solid #b35500;
+            border-radius: 5px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.75);
+            z-index: 9999;
+            min-width: 175px;
+            padding: 4px 0;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .ctx-item {
+            padding: 8px 14px;
+            color: #e0e0ea;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.15s, color 0.15s;
+        }
+        .ctx-item:hover {
+            background-color: #b35500;
+            color: #ffffff;
+        }
+        .ctx-divider {
+            height: 1px;
+            background-color: #2e2e3d;
+            margin: 4px 0;
+        }
     </style>
 </head>
 <body style="background-color: #121217; color: #c2c2d0; font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 0;">
+
+    <!-- MENÚ CONTEXTUAL FLOTANTE PARA PIEZAS -->
+    <div id="part-context-menu">
+        <div class="ctx-item" id="ctx-rotate-cw">↻ GIRAR +90° (HORARIO)</div>
+        <div class="ctx-item" id="ctx-rotate-ccw">↺ GIRAR -90° (ANTIHORARIO)</div>
+        <div class="ctx-divider"></div>
+        <div class="ctx-item" id="ctx-delete-part" style="color: #ff6b6b;">✕ QUITAR PIEZA DEL PLANO</div>
+    </div>
 
     <!-- BARRA SUPERIOR HEADER -->
     <header style="background-color: #141419; border-bottom: 1px solid #282833; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center;">
