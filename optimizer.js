@@ -1,6 +1,6 @@
 // =========================================================
 // DATAWAVES GUILLOTINE OPTIMIZER 2D - MOTOR POR BLOQUES/TIRAS
-// CON EDITOR INTERACTIVO DRAG & DROP, IMÁN Y ROTACIÓN 90°
+// CON IMÁN INTENSO, COLISIÓN SÓLIDA Y SELECCIÓN MÚLTIPLE
 // =========================================================
 
 const SUPABASE_URL = 'https://sksanvauywgjxmxujicl.supabase.co';
@@ -17,14 +17,16 @@ let partColorsMap = {};
 let currentLoadedId = null; 
 let isColorBlindMode = false;
 
-// Estado global de programas generados para manipulación interactiva
+// Estado global de programas generados
 let currentProgramsState = [];
 let currentProjectNameState = '';
 
-// Estado de Drag & Drop y Menú Contextual
+// Estado de Drag & Drop, Selección Múltiple y Menú Contextual
 let dragState = null;
+let boxSelectState = null;
+let selectedItemsMap = {}; // Clave: "progIdx-itemIdx"
 let contextTarget = null;
-const SNAP_THRESHOLD = 18; // Tolerancia del imán en mm
+const SNAP_THRESHOLD = 32; // Imán más potente y perceptible (32 mm)
 
 function getActiveSheet() {
     return sheetsList.find(s => s.id === activeSheetId) || sheetsList[0];
@@ -317,6 +319,7 @@ async function loadProjectData(selectedDoc) {
 function executeNewProjectReset() {
     currentLoadedId = null;
     currentProgramsState = [];
+    selectedItemsMap = {};
     document.getElementById('project-name').value = '';
     document.getElementById('blade-width').value = '0';
     document.getElementById('saved-projects-select').value = '';
@@ -750,6 +753,7 @@ document.getElementById('btn-optimize').addEventListener('click', () => {
 
     currentProjectNameState = projectName;
     currentProgramsState = groupedPrograms;
+    selectedItemsMap = {};
     renderFinalResults(currentProjectNameState, currentProgramsState);
 });
 
@@ -867,11 +871,11 @@ function cleanupRects(rects) {
 }
 
 // =========================================================
-// MOTOR DE IMÁN (MAGNETIC SNAP), COLISIONES Y ROTACIÓN 90°
+// MOTOR DE IMÁN POTENTE Y COLISIÓN ESTRICTA (ANTISOLAPAMIENTO)
 // =========================================================
 
 function rectsOverlap(a, b) {
-    const eps = 0.01;
+    const eps = 0.05;
     return (
         a.x < b.x + b.w - eps &&
         a.x + a.w > b.x + eps &&
@@ -884,25 +888,24 @@ function applyMagneticSnapAndCollision(targetItem, candidateX, candidateY, sheet
     let x = candidateX;
     let y = candidateY;
 
-    // 1. Imán contra bordes de la chapa
+    // 1. Imán potente con bordes de chapa
     if (Math.abs(x - 0) <= SNAP_THRESHOLD) x = 0;
     if (Math.abs((x + targetItem.w) - sheetW) <= SNAP_THRESHOLD) x = sheetW - targetItem.w;
     if (Math.abs(y - 0) <= SNAP_THRESHOLD) y = 0;
     if (Math.abs((y + targetItem.h) - sheetH) <= SNAP_THRESHOLD) y = sheetH - targetItem.h;
 
-    // 2. Imán contra bordes y alineación con otras piezas
+    // 2. Imán potente con bordes y alineaciones de otras piezas
     let bestSnapX = x;
     let minDiffX = SNAP_THRESHOLD + 1;
     let bestSnapY = y;
     let minDiffY = SNAP_THRESHOLD + 1;
 
     otherItems.forEach(other => {
-        // Eje X: pegar borde izquierdo a derecho de otra pieza, derecho a izquierdo, o alinear bordes
         const xCandidates = [
-            other.x + other.w,          // Pegar a la derecha de 'other'
-            other.x - targetItem.w,     // Pegar a la izquierda de 'other'
-            other.x,                    // Alinear izquierda con izquierda
-            other.x + other.w - targetItem.w // Alinear derecha con derecha
+            other.x + other.w,          // Pegar a la derecha
+            other.x - targetItem.w,     // Pegar a la izquierda
+            other.x,                    // Alinear bordes izquierdos
+            other.x + other.w - targetItem.w // Alinear bordes derechos
         ];
 
         xCandidates.forEach(cx => {
@@ -913,12 +916,11 @@ function applyMagneticSnapAndCollision(targetItem, candidateX, candidateY, sheet
             }
         });
 
-        // Eje Y: pegar borde superior a inferior de otra pieza, inferior a superior, o alinear bordes
         const yCandidates = [
-            other.y + other.h,          // Pegar debajo de 'other'
-            other.y - targetItem.h,     // Pegar encima de 'other'
-            other.y,                    // Alinear arriba con arriba
-            other.y + other.h - targetItem.h // Alinear abajo con abajo
+            other.y + other.h,          // Pegar debajo
+            other.y - targetItem.h,     // Pegar encima
+            other.y,                    // Alinear bordes superiores
+            other.y + other.h - targetItem.h // Alinear bordes inferiores
         ];
 
         yCandidates.forEach(cy => {
@@ -933,11 +935,11 @@ function applyMagneticSnapAndCollision(targetItem, candidateX, candidateY, sheet
     if (minDiffX <= SNAP_THRESHOLD) x = bestSnapX;
     if (minDiffY <= SNAP_THRESHOLD) y = bestSnapY;
 
-    // 3. Limitar estrictamente dentro de los límites de la chapa
+    // Límites estrictos
     x = Math.max(0, Math.min(sheetW - targetItem.w, Math.round(x)));
     y = Math.max(0, Math.min(sheetH - targetItem.h, Math.round(y)));
 
-    // 4. Verificación de colisión sólida (no permite solaparse sobre otra pieza)
+    // 3. Verificación estricta de colisión (cero solapamiento permitido)
     const testRect = { x, y, w: targetItem.w, h: targetItem.h };
     const hasCollision = otherItems.some(other => rectsOverlap(testRect, other));
 
@@ -945,7 +947,6 @@ function applyMagneticSnapAndCollision(targetItem, candidateX, candidateY, sheet
 }
 
 function findFreeSpotForItem(item, sheetW, sheetH, otherItems) {
-    // Busca una posición libre respetando bordes e imán si al soltar hubo colisión
     const step = 10;
     for (let y = 0; y <= sheetH - item.h; y += step) {
         for (let x = 0; x <= sheetW - item.w; x += step) {
@@ -976,9 +977,9 @@ function renderFinalResults(projectName, groupedPrograms) {
     const container = document.getElementById('results-container');
     let html = `
         <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-            <div style="font-size: 12px;">
+            <div style="font-size: 11px;">
                 <span>PROYECTO: <strong>${projectName.toUpperCase()}</strong></span>
-                <span style="margin-left: 14px; font-size: 10px; color: #e06b00;">[ARRASTRA LAS PIEZAS PARA MOVERLAS O CAMBIARLAS DE CHAPA • CLIC DERECHO PARA GIRAR 90°]</span>
+                <span style="margin-left: 14px; font-size: 10px; color: #e06b00;">[ARRASTRA EN VACÍO PARA SELECCIONAR GRUPO • ARRASTRA PIEZA PARA MOVER EN BLOQUE • CLIC DERECHO PARA GIRAR 90°]</span>
             </div>
             <button id="btn-print-report" class="btn-app" style="background-color: #b35500; color: #ffffff;">IMPRIMIR PLANOS NESTING (A4)</button>
         </div>
@@ -1023,9 +1024,12 @@ function renderFinalResults(projectName, groupedPrograms) {
 
                             ${sheet.placedItems.map((it, itemIdx) => {
                                 let color = getPartColor(it.name);
+                                let isSelected = !!selectedItemsMap[`${progIdx}-${itemIdx}`];
+                                let strokeColor = isSelected ? '#ff8c00' : '#121217';
+                                let strokeWidth = isSelected ? '3.5' : '1.5';
                                 return `
                                     <g class="draggable-part" data-prog-idx="${progIdx}" data-item-idx="${itemIdx}">
-                                        <rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" fill="${color}" stroke="#121217" stroke-width="1.5"/>
+                                        <rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" fill="${color}" stroke="${strokeColor}" stroke-width="${strokeWidth}"/>
                                         <text x="${it.x + it.w/2}" y="${it.y + it.h/2}" fill="#ffffff" font-size="${Math.min(it.w, it.h) * 0.25}" font-weight="bold" text-anchor="middle" dominant-baseline="middle" style="pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,0.8);">${it.name.toUpperCase()}</text>
                                     </g>
                                 `;
@@ -1093,16 +1097,56 @@ function renderFinalResults(projectName, groupedPrograms) {
 }
 
 // =========================================================
-// EVENTOS DE ARRASTRE ENTRE CHAPAS Y MENÚ CONTEXTUAL
+// INTERACCIÓN: ARRASTRE DE GRUPO, SELECCIÓN MÚLTIPLE Y MENÚ
 // =========================================================
 
 function attachInteractiveSheetEvents() {
     const contextMenu = document.getElementById('part-context-menu');
 
+    document.querySelectorAll('.sheet-svg-canvas').forEach(svgElem => {
+        // Clic en el área de la chapa (para selección por caja o deseleccionar en vacío)
+        svgElem.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            contextMenu.style.display = 'none';
+
+            const partGroup = e.target.closest('.draggable-part');
+            const progIdx = parseInt(svgElem.getAttribute('data-prog-idx'));
+
+            if (!partGroup) {
+                // Clic en espacio vacío: iniciar selección múltiple por rectángulo (Rubberband)
+                const mousePos = getSvgMouseCoords(svgElem, e.clientX, e.clientY);
+                
+                // Si no se mantiene Shift, limpiar selección anterior
+                if (!e.shiftKey) {
+                    selectedItemsMap = {};
+                }
+
+                // Crear rectángulo visual SVG para la selección
+                const rectBox = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rectBox.setAttribute('x', mousePos.x);
+                rectBox.setAttribute('y', mousePos.y);
+                rectBox.setAttribute('width', 0);
+                rectBox.setAttribute('height', 0);
+                rectBox.setAttribute('fill', 'rgba(179, 85, 0, 0.15)');
+                rectBox.setAttribute('stroke', '#ff8c00');
+                rectBox.setAttribute('stroke-width', '1.5');
+                rectBox.setAttribute('stroke-dasharray', '4');
+                svgElem.appendChild(rectBox);
+
+                boxSelectState = {
+                    progIdx,
+                    startX: mousePos.x,
+                    startY: mousePos.y,
+                    svgElem,
+                    rectBoxElem: rectBox
+                };
+            }
+        });
+    });
+
     document.querySelectorAll('.draggable-part').forEach(partGroup => {
-        // Iniciar arrastre (Agarrar)
         partGroup.addEventListener('mousedown', (e) => {
-            if (e.button !== 0) return; // Solo clic izquierdo
+            if (e.button !== 0) return;
             e.preventDefault();
             e.stopPropagation();
             contextMenu.style.display = 'none';
@@ -1110,49 +1154,54 @@ function attachInteractiveSheetEvents() {
             const progIdx = parseInt(partGroup.getAttribute('data-prog-idx'));
             const itemIdx = parseInt(partGroup.getAttribute('data-item-idx'));
             const svgElem = partGroup.closest('svg');
-            const item = currentProgramsState[progIdx].sheet.placedItems[itemIdx];
+            const key = `${progIdx}-${itemIdx}`;
 
+            // Si la pieza clickeada no estaba seleccionada y no se usa Shift, seleccionarla individualmente
+            if (!selectedItemsMap[key] && !e.shiftKey) {
+                selectedItemsMap = {};
+                selectedItemsMap[key] = true;
+            } else if (e.shiftKey) {
+                selectedItemsMap[key] = !selectedItemsMap[key];
+                if (!selectedItemsMap[key]) delete selectedItemsMap[key];
+            } else {
+                selectedItemsMap[key] = true;
+            }
+
+            // Recopilar todas las piezas seleccionadas que se moverán en bloque
+            const sheet = currentProgramsState[progIdx].sheet;
+            let groupItems = [];
+            
+            Object.keys(selectedItemsMap).forEach(k => {
+                const [pIdx, iIdx] = k.split('-').map(Number);
+                if (pIdx === progIdx) {
+                    groupItems.push({
+                        itemIdx: iIdx,
+                        item: { ...sheet.placedItems[iIdx] }
+                    });
+                }
+            });
+
+            const primaryItem = sheet.placedItems[itemIdx];
             const mousePos = getSvgMouseCoords(svgElem, e.clientX, e.clientY);
-
-            // Crear ghost visual flotante para poder arrastrar incluso hacia otras chapas
-            const ghost = document.createElement('div');
-            ghost.style.position = 'fixed';
-            ghost.style.pointerEvents = 'none';
-            ghost.style.background = getPartColor(item.name);
-            ghost.style.border = '2px solid #ffffff';
-            ghost.style.color = '#ffffff';
-            ghost.style.fontSize = '11px';
-            ghost.style.fontWeight = 'bold';
-            ghost.style.padding = '6px 10px';
-            ghost.style.borderRadius = '4px';
-            ghost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.6)';
-            ghost.style.zIndex = '10000';
-            ghost.style.left = (e.clientX + 12) + 'px';
-            ghost.style.top = (e.clientY + 12) + 'px';
-            ghost.textContent = `${item.name.toUpperCase()} (${item.w} x ${item.h})`;
-            document.body.appendChild(ghost);
-
-            partGroup.style.opacity = '0.35';
 
             dragState = {
                 sourceProgIdx: progIdx,
-                sourceItemIdx: itemIdx,
-                item: { ...item },
-                offsetX: mousePos.x - item.x,
-                offsetY: mousePos.y - item.y,
-                ghostElem: ghost,
+                primaryItemIdx: itemIdx,
+                groupItems: groupItems, // Arreglo para movimiento en grupo
+                offsetX: mousePos.x - primaryItem.x,
+                offsetY: mousePos.y - primaryItem.y,
                 sourceGroupElem: partGroup
             };
+
+            renderFinalResults(currentProjectNameState, currentProgramsState);
         });
 
-        // Clic derecho -> Menú flotante para rotar 90°
         partGroup.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             e.stopPropagation();
 
             const progIdx = parseInt(partGroup.getAttribute('data-prog-idx'));
             const itemIdx = parseInt(partGroup.getAttribute('data-item-idx'));
-
             contextTarget = { progIdx, itemIdx };
 
             contextMenu.style.display = 'block';
@@ -1167,14 +1216,33 @@ function attachInteractiveSheetEvents() {
     });
 }
 
-// Movimiento global mientras se arrastra una pieza
+// Movimiento global (Mousemove para Arrastre en Grupo o Selección por Caja)
 window.addEventListener('mousemove', (e) => {
+    if (boxSelectState) {
+        const mousePos = getSvgMouseCoords(boxSelectState.svgElem, e.clientX, e.clientY);
+        const x = Math.min(boxSelectState.startX, mousePos.x);
+        const y = Math.min(boxSelectState.startY, mousePos.y);
+        const w = Math.abs(mousePos.x - boxSelectState.startX);
+        const h = Math.abs(mousePos.y - boxSelectState.startY);
+
+        boxSelectState.rectBoxElem.setAttribute('x', x);
+        boxSelectState.rectBoxElem.setAttribute('y', y);
+        boxSelectState.rectBoxElem.setAttribute('width', w);
+        boxSelectState.rectBoxElem.setAttribute('height', h);
+
+        // Seleccionar piezas que intersectan con el rectángulo de selección
+        const sheet = currentProgramsState[boxSelectState.progIdx].sheet;
+        sheet.placedItems.forEach((item, idx) => {
+            const intersects = !(item.x > x + w || item.x + item.w < x || item.y > y + h || item.y + item.h < y);
+            if (intersects) {
+                selectedItemsMap[`${boxSelectState.progIdx}-${idx}`] = true;
+            }
+        });
+        return;
+    }
+
     if (!dragState) return;
 
-    dragState.ghostElem.style.left = (e.clientX + 12) + 'px';
-    dragState.ghostElem.style.top = (e.clientY + 12) + 'px';
-
-    // Detectar sobre qué chapa (SVG) está pasando el cursor
     const elemUnder = document.elementFromPoint(e.clientX, e.clientY);
     const targetSvg = elemUnder ? elemUnder.closest('.sheet-svg-canvas') : null;
 
@@ -1183,45 +1251,71 @@ window.addEventListener('mousemove', (e) => {
         const targetSheet = currentProgramsState[targetProgIdx].sheet;
         const mousePos = getSvgMouseCoords(targetSvg, e.clientX, e.clientY);
 
-        const rawX = mousePos.x - dragState.offsetX;
-        const rawY = mousePos.y - dragState.offsetY;
+        // Calcular el desplazamiento delta de la pieza principal del grupo
+        const primaryOrig = dragState.groupItems.find(g => g.itemIdx === dragState.primaryItemIdx).item;
+        const targetPrimaryX = mousePos.x - dragState.offsetX;
+        const targetPrimaryY = mousePos.y - dragState.offsetY;
 
+        const deltaX = targetPrimaryX - primaryOrig.x;
+        const deltaY = targetPrimaryY - primaryOrig.y;
+
+        // Validar colisiones para todo el grupo en bloque
         const otherItems = targetSheet.placedItems.filter((_, idx) => 
-            !(targetProgIdx === dragState.sourceProgIdx && idx === dragState.sourceItemIdx)
+            !dragState.groupItems.some(g => g.itemIdx === idx && targetProgIdx === dragState.sourceProgIdx)
         );
 
-        const snapped = applyMagneticSnapAndCollision(
-            dragState.item,
-            rawX,
-            rawY,
-            targetSheet.width,
-            targetSheet.height,
-            otherItems
-        );
-
-        // Si está dentro de la misma chapa, actualiza en vivo la posición con efecto imán
-        if (targetProgIdx === dragState.sourceProgIdx) {
-            const rectElem = dragState.sourceGroupElem.querySelector('rect');
-            const textElem = dragState.sourceGroupElem.querySelector('text');
-            if (rectElem && textElem) {
-                rectElem.setAttribute('x', snapped.x);
-                rectElem.setAttribute('y', snapped.y);
-                rectElem.setAttribute('stroke', snapped.valid ? '#ffffff' : '#ff3333');
-                rectElem.setAttribute('stroke-width', '3');
-                textElem.setAttribute('x', snapped.x + dragState.item.w / 2);
-                textElem.setAttribute('y', snapped.y + dragState.item.h / 2);
+        let groupValid = true;
+        let testedGroupPositions = dragState.groupItems.map(g => {
+            const newX = g.item.x + deltaX;
+            const newY = g.item.y + deltaY;
+            const testRect = { x: newX, y: newY, w: g.item.w, h: g.item.h };
+            
+            // Verificar bordes de chapa
+            if (newX < 0 || newY < 0 || newX + g.item.w > targetSheet.width || newY + g.item.h > targetSheet.height) {
+                groupValid = false;
             }
-        }
+            // Verificar colisión con otras piezas ajenas al grupo
+            if (otherItems.some(o => rectsOverlap(testRect, o))) {
+                groupValid = false;
+            }
+            return { itemIdx: g.itemIdx, x: newX, y: newY };
+        });
+
+        // Aplicar posiciones visuales en vivo con indicador de validez (Rojo si hay colisión, Blanco si es válido)
+        targetSvg.querySelectorAll('.draggable-part').forEach(node => {
+            const pIdx = parseInt(node.getAttribute('data-prog-idx'));
+            const iIdx = parseInt(node.getAttribute('data-item-idx'));
+            const match = dragState.groupItems.find(g => g.itemIdx === iIdx && pIdx === dragState.sourceProgIdx);
+            
+            if (match) {
+                const foundPos = testedGroupPositions.find(tp => tp.itemIdx === iIdx);
+                const rectElem = node.querySelector('rect');
+                const textElem = node.querySelector('text');
+                if (rectElem && textElem && foundPos) {
+                    rectElem.setAttribute('x', foundPos.x);
+                    rectElem.setAttribute('y', foundPos.y);
+                    rectElem.setAttribute('stroke', groupValid ? '#ffffff' : '#ff3333');
+                    rectElem.setAttribute('stroke-width', groupValid ? '3' : '3.5');
+                    textElem.setAttribute('x', foundPos.x + match.item.w / 2);
+                    textElem.setAttribute('y', foundPos.y + match.item.h / 2);
+                }
+            }
+        });
     }
 });
 
-// Soltar la pieza (Drop) en la misma chapa o en otra chapa distinta
+// Soltar (Mouseup global)
 window.addEventListener('mouseup', (e) => {
-    if (!dragState) return;
-
-    if (dragState.ghostElem && dragState.ghostElem.parentNode) {
-        dragState.ghostElem.parentNode.removeChild(dragState.ghostElem);
+    if (boxSelectState) {
+        if (boxSelectState.rectBoxElem && boxSelectState.rectBoxElem.parentNode) {
+            boxSelectState.rectBoxElem.parentNode.removeChild(boxSelectState.rectBoxElem);
+        }
+        boxSelectState = null;
+        renderFinalResults(currentProjectNameState, currentProgramsState);
+        return;
     }
+
+    if (!dragState) return;
 
     const elemUnder = document.elementFromPoint(e.clientX, e.clientY);
     const targetSvg = elemUnder ? elemUnder.closest('.sheet-svg-canvas') : null;
@@ -1230,42 +1324,79 @@ window.addEventListener('mouseup', (e) => {
         const targetProgIdx = parseInt(targetSvg.getAttribute('data-prog-idx'));
         const sourceSheet = currentProgramsState[dragState.sourceProgIdx].sheet;
         const targetSheet = currentProgramsState[targetProgIdx].sheet;
+        const mousePos = getSvgMouseCoords(targetSvg, e.clientX, e.clientY);
 
-        // Validar que la pieza quepa físicamente en la chapa destino
-        if (dragState.item.w <= targetSheet.width && dragState.item.h <= targetSheet.height) {
-            const mousePos = getSvgMouseCoords(targetSvg, e.clientX, e.clientY);
-            const rawX = mousePos.x - dragState.offsetX;
-            const rawY = mousePos.y - dragState.offsetY;
+        const primaryOrig = dragState.groupItems.find(g => g.itemIdx === dragState.primaryItemIdx).item;
+        const rawDeltaX = (mousePos.x - dragState.offsetX) - primaryOrig.x;
+        const rawDeltaY = (mousePos.y - dragState.offsetY) - primaryOrig.y;
 
-            const otherItems = targetSheet.placedItems.filter((_, idx) => 
-                !(targetProgIdx === dragState.sourceProgIdx && idx === dragState.sourceItemIdx)
-            );
+        // Probar imán potente sobre la pieza principal del grupo
+        const otherItems = targetSheet.placedItems.filter((_, idx) => 
+            !dragState.groupItems.some(g => g.itemIdx === idx && targetProgIdx === dragState.sourceProgIdx)
+        );
 
-            let snapped = applyMagneticSnapAndCollision(
-                dragState.item,
-                rawX,
-                rawY,
-                targetSheet.width,
-                targetSheet.height,
-                otherItems
-            );
+        const tempPrimary = { ...primaryOrig, x: primaryOrig.x + rawDeltaX, y: primaryOrig.y + rawDeltaY };
+        const snappedPrimary = applyMagneticSnapAndCollision(
+            tempPrimary,
+            tempPrimary.x,
+            tempPrimary.y,
+            targetSheet.width,
+            targetSheet.height,
+            otherItems
+        );
 
-            // Si se soltó encima de otra pieza en una chapa nueva, buscar hueco libre automático
-            if (!snapped.valid && targetProgIdx !== dragState.sourceProgIdx) {
-                snapped = findFreeSpotForItem(dragState.item, targetSheet.width, targetSheet.height, otherItems);
+        const finalDeltaX = snappedPrimary.x - primaryOrig.x;
+        const finalDeltaY = snappedPrimary.y - primaryOrig.y;
+
+        // Verificar si todo el grupo cabe y no colisiona en su posición final con imán
+        let canApplyGroup = true;
+        let finalGroupCoords = dragState.groupItems.map(g => {
+            const nx = g.item.x + finalDeltaX;
+            const ny = g.item.y + finalDeltaY;
+            if (nx < 0 || ny < 0 || nx + g.item.w > targetSheet.width || ny + g.item.h > targetSheet.height) {
+                canApplyGroup = false;
             }
+            return { itemIdx: g.itemIdx, x: nx, y: ny, originalItem: g.item };
+        });
 
-            if (snapped.valid) {
-                // Quitar de la chapa origen
-                const [movedItem] = sourceSheet.placedItems.splice(dragState.sourceItemIdx, 1);
-                movedItem.x = snapped.x;
-                movedItem.y = snapped.y;
+        // Validar colisiones cruzadas internas o externas
+        const groupIndices = dragState.groupItems.map(g => g.itemIdx);
+        const externalItems = targetSheet.placedItems.filter((_, idx) => 
+            !(dragState.sourceProgIdx === targetProgIdx && groupIndices.includes(idx))
+        );
 
-                // Insertar en la chapa destino
-                targetSheet.placedItems.push(movedItem);
+        finalGroupCoords.forEach(fg => {
+            const testRect = { x: fg.x, y: fg.y, w: fg.originalItem.w, h: fg.originalItem.h };
+            if (externalItems.some(o => rectsOverlap(testRect, o))) {
+                canApplyGroup = false;
             }
+        });
+
+        if (canApplyGroup) {
+            // Extraer y reubicar en bloque ordenadamente
+            dragState.groupItems.sort((a, b) => b.itemIdx - a.itemIdx); // Orden inverso para eliminar índices sin alterar
+            let movedItems = [];
+
+            if (dragState.sourceProgIdx === targetProgIdx) {
+                dragState.groupItems.forEach(g => {
+                    const [it] = sourceSheet.placedItems.splice(g.itemIdx, 1);
+                    const coord = finalGroupCoords.find(fc => fc.itemIdx === g.itemIdx);
+                    it.x = coord.x;
+                    it.y = coord.y;
+                    movedItems.push(it);
+                });
+            } else {
+                dragState.groupItems.forEach(g => {
+                    const [it] = sourceSheet.placedItems.splice(g.itemIdx, 1);
+                    const coord = finalGroupCoords.find(fc => fc.itemIdx === g.itemIdx);
+                    it.x = coord.x;
+                    it.y = coord.y;
+                    movedItems.push(it);
+                });
+            }
+            targetSheet.placedItems.push(...movedItems);
         } else {
-            alert(`LA PIEZA (${dragState.item.w} x ${dragState.item.h} mm) NO CABE EN LA CHAPA DESTINO (${targetSheet.width} x ${targetSheet.height} mm).`);
+            alert('MOVIMIENTO INVÁLIDO: EL GRUPO SUPERA LOS LÍMITES DE LA CHAPA O COLISIONA CON OTRAS PIEZAS.');
         }
     }
 
@@ -1273,7 +1404,7 @@ window.addEventListener('mouseup', (e) => {
     renderFinalResults(currentProjectNameState, currentProgramsState);
 });
 
-// Cerrar menú contextual al hacer clic fuera
+// Cerrar menú contextual
 window.addEventListener('click', (e) => {
     const contextMenu = document.getElementById('part-context-menu');
     if (contextMenu && !contextMenu.contains(e.target)) {
@@ -1281,7 +1412,7 @@ window.addEventListener('click', (e) => {
     }
 });
 
-// Rotar pieza de a 90 grados (Horario / Antihorario)
+// Rotación 90°
 function rotateContextPart() {
     if (!contextTarget) return;
     const { progIdx, itemIdx } = contextTarget;
@@ -1299,10 +1430,7 @@ function rotateContextPart() {
     const otherItems = sheet.placedItems.filter((_, idx) => idx !== itemIdx);
     const tempRotated = { ...item, w: newW, h: newH };
 
-    // Intentar mantener su esquina superior izquierda (con imán y ajuste a bordes de chapa)
     let result = applyMagneticSnapAndCollision(tempRotated, item.x, item.y, sheet.width, sheet.height, otherItems);
-
-    // Si al girar colisiona con una pieza vecina, buscar el espacio libre más cercano
     if (!result.valid) {
         result = findFreeSpotForItem(tempRotated, sheet.width, sheet.height, otherItems);
     }
