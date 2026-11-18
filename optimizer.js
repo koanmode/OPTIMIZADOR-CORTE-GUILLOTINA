@@ -1,5 +1,6 @@
 // =========================================================
 // DATAWAVES GUILLOTINE OPTIMIZER 2D - MOTOR POR BLOQUES/TIRAS
+// CON EDITOR INTERACTIVO DRAG & DROP, IMÁN Y ROTACIÓN 90°
 // =========================================================
 
 const SUPABASE_URL = 'https://sksanvauywgjxmxujicl.supabase.co';
@@ -15,6 +16,15 @@ let editingPartIndex = null;
 let partColorsMap = {};
 let currentLoadedId = null; 
 let isColorBlindMode = false;
+
+// Estado global de programas generados para manipulación interactiva
+let currentProgramsState = [];
+let currentProjectNameState = '';
+
+// Estado de Drag & Drop y Menú Contextual
+let dragState = null;
+let contextTarget = null;
+const SNAP_THRESHOLD = 18; // Tolerancia del imán en mm
 
 function getActiveSheet() {
     return sheetsList.find(s => s.id === activeSheetId) || sheetsList[0];
@@ -237,7 +247,9 @@ document.getElementById('btn-colorblind-mode').addEventListener('click', () => {
         btn.style.backgroundColor = 'transparent';
     }
 
-    if (hasAnyParts()) {
+    if (currentProgramsState.length > 0) {
+        renderFinalResults(currentProjectNameState, currentProgramsState);
+    } else if (hasAnyParts()) {
         document.getElementById('btn-optimize').click();
     }
 });
@@ -304,6 +316,7 @@ async function loadProjectData(selectedDoc) {
 
 function executeNewProjectReset() {
     currentLoadedId = null;
+    currentProgramsState = [];
     document.getElementById('project-name').value = '';
     document.getElementById('blade-width').value = '0';
     document.getElementById('saved-projects-select').value = '';
@@ -692,7 +705,6 @@ document.getElementById('btn-optimize').addEventListener('click', () => {
         let sheetW = Math.max(sheetModule.width, sheetModule.height);
         let sheetH = Math.min(sheetModule.width, sheetModule.height);
 
-        // Clona y organiza piezas agrupándolas por tipo y dimensiones
         let partsQueue = sheetModule.partsList.map(p => ({
             name: p.name,
             w: p.width,
@@ -718,7 +730,6 @@ document.getElementById('btn-optimize').addEventListener('click', () => {
         allGeneratedPrograms.push(...compiledSheets);
     });
 
-    // Agrupa planos idénticos (P1, P2...)
     let groupedPrograms = [];
     allGeneratedPrograms.forEach((sheet) => {
         let signature = `${sheet.desc}_${sheet.width}x${sheet.height}_` + sheet.placedItems.map(it => 
@@ -737,16 +748,16 @@ document.getElementById('btn-optimize').addEventListener('click', () => {
         }
     });
 
-    renderFinalResults(projectName, groupedPrograms);
+    currentProjectNameState = projectName;
+    currentProgramsState = groupedPrograms;
+    renderFinalResults(currentProjectNameState, currentProgramsState);
 });
 
 function hasRemainingParts(queue) {
     return queue.some(p => p.qty > 0);
 }
 
-// Algoritmo principal de empaquetado por tiras/bloques continuos
 function packSheetByBlocks(sheet, partsQueue, allowRotation, isSimplifyCuts) {
-    // Ordena los tipos de pieza por área descendente
     partsQueue.sort((a, b) => (b.w * b.h) - (a.w * a.h));
 
     for (let partType of partsQueue) {
@@ -760,18 +771,15 @@ function packSheetByBlocks(sheet, partsQueue, allowRotation, isSimplifyCuts) {
         while (partType.qty > 0) {
             let placed = false;
 
-            // Busca la mejor ubicación modular
             for (let rectIdx = 0; rectIdx < sheet.freeRects.length; rectIdx++) {
                 let rect = sheet.freeRects[rectIdx];
 
                 for (let ori of orientations) {
                     if (ori.w <= rect.w && ori.h <= rect.h) {
                         
-                        // Determina cuántas entran juntas a lo ancho y largo en el espacio disponible
                         let countX = Math.min(partType.qty, Math.floor(rect.w / ori.w));
                         let countY = 1;
 
-                        // Si entran más de 1 fila de la misma pieza, forma un bloque uniforme (Grid/Strip)
                         if (partType.qty >= countX * 2 && Math.floor(rect.h / ori.h) >= 2) {
                             countY = Math.min(Math.floor(partType.qty / countX), Math.floor(rect.h / ori.h));
                         }
@@ -782,7 +790,6 @@ function packSheetByBlocks(sheet, partsQueue, allowRotation, isSimplifyCuts) {
                         let blockW = countX * ori.w;
                         let blockH = countY * ori.h;
 
-                        // Coloca el bloque completo de piezas unificadas
                         for (let cy = 0; cy < countY; cy++) {
                             for (let cx = 0; cx < countX; cx++) {
                                 sheet.placedItems.push({
@@ -796,14 +803,11 @@ function packSheetByBlocks(sheet, partsQueue, allowRotation, isSimplifyCuts) {
                         }
 
                         partType.qty -= totalPlaced;
-
-                        // Subdivide el espacio sobrante respetando bloques completos de remanente libre
                         sheet.freeRects.splice(rectIdx, 1);
 
                         let rightRemW = rect.w - blockW;
                         let bottomRemH = rect.h - blockH;
 
-                        // Si queda retazo grande a la derecha o abajo, se reserva como bloque único (ej. 600x1220)
                         if (rightRemW > 0) {
                             sheet.freeRects.push({
                                 x: rect.x + blockW,
@@ -830,7 +834,7 @@ function packSheetByBlocks(sheet, partsQueue, allowRotation, isSimplifyCuts) {
                 if (placed) break;
             }
 
-            if (!placed) break; // Si no cupo en ningún retazo libre, pasa a la siguiente chapa
+            if (!placed) break;
         }
     }
 }
@@ -847,7 +851,6 @@ function cleanupRects(rects) {
             if (i === j) continue;
             let r2 = rects[j];
             
-            // Elimina sub-rectángulos absorbidos por otros mayores
             if (r1.x >= r2.x && r1.y >= r2.y && 
                 (r1.x + r1.w) <= (r2.x + r2.w) && 
                 (r1.y + r1.h) <= (r2.y + r2.h)) {
@@ -860,20 +863,122 @@ function cleanupRects(rects) {
         }
     }
 
-    // Ordena de arriba a abajo, de izquierda a derecha para mantener el flujo visual
     return result.sort((a, b) => (a.y - b.y) || (a.x - b.x));
 }
 
 // =========================================================
-// RENDERIZADO VISUAL Y PLANOS DE CORTE
+// MOTOR DE IMÁN (MAGNETIC SNAP), COLISIONES Y ROTACIÓN 90°
+// =========================================================
+
+function rectsOverlap(a, b) {
+    const eps = 0.01;
+    return (
+        a.x < b.x + b.w - eps &&
+        a.x + a.w > b.x + eps &&
+        a.y < b.y + b.h - eps &&
+        a.y + a.h > b.y + eps
+    );
+}
+
+function applyMagneticSnapAndCollision(targetItem, candidateX, candidateY, sheetW, sheetH, otherItems) {
+    let x = candidateX;
+    let y = candidateY;
+
+    // 1. Imán contra bordes de la chapa
+    if (Math.abs(x - 0) <= SNAP_THRESHOLD) x = 0;
+    if (Math.abs((x + targetItem.w) - sheetW) <= SNAP_THRESHOLD) x = sheetW - targetItem.w;
+    if (Math.abs(y - 0) <= SNAP_THRESHOLD) y = 0;
+    if (Math.abs((y + targetItem.h) - sheetH) <= SNAP_THRESHOLD) y = sheetH - targetItem.h;
+
+    // 2. Imán contra bordes y alineación con otras piezas
+    let bestSnapX = x;
+    let minDiffX = SNAP_THRESHOLD + 1;
+    let bestSnapY = y;
+    let minDiffY = SNAP_THRESHOLD + 1;
+
+    otherItems.forEach(other => {
+        // Eje X: pegar borde izquierdo a derecho de otra pieza, derecho a izquierdo, o alinear bordes
+        const xCandidates = [
+            other.x + other.w,          // Pegar a la derecha de 'other'
+            other.x - targetItem.w,     // Pegar a la izquierda de 'other'
+            other.x,                    // Alinear izquierda con izquierda
+            other.x + other.w - targetItem.w // Alinear derecha con derecha
+        ];
+
+        xCandidates.forEach(cx => {
+            const diff = Math.abs(x - cx);
+            if (diff < minDiffX) {
+                minDiffX = diff;
+                bestSnapX = cx;
+            }
+        });
+
+        // Eje Y: pegar borde superior a inferior de otra pieza, inferior a superior, o alinear bordes
+        const yCandidates = [
+            other.y + other.h,          // Pegar debajo de 'other'
+            other.y - targetItem.h,     // Pegar encima de 'other'
+            other.y,                    // Alinear arriba con arriba
+            other.y + other.h - targetItem.h // Alinear abajo con abajo
+        ];
+
+        yCandidates.forEach(cy => {
+            const diff = Math.abs(y - cy);
+            if (diff < minDiffY) {
+                minDiffY = diff;
+                bestSnapY = cy;
+            }
+        });
+    });
+
+    if (minDiffX <= SNAP_THRESHOLD) x = bestSnapX;
+    if (minDiffY <= SNAP_THRESHOLD) y = bestSnapY;
+
+    // 3. Limitar estrictamente dentro de los límites de la chapa
+    x = Math.max(0, Math.min(sheetW - targetItem.w, Math.round(x)));
+    y = Math.max(0, Math.min(sheetH - targetItem.h, Math.round(y)));
+
+    // 4. Verificación de colisión sólida (no permite solaparse sobre otra pieza)
+    const testRect = { x, y, w: targetItem.w, h: targetItem.h };
+    const hasCollision = otherItems.some(other => rectsOverlap(testRect, other));
+
+    return { x, y, valid: !hasCollision };
+}
+
+function findFreeSpotForItem(item, sheetW, sheetH, otherItems) {
+    // Busca una posición libre respetando bordes e imán si al soltar hubo colisión
+    const step = 10;
+    for (let y = 0; y <= sheetH - item.h; y += step) {
+        for (let x = 0; x <= sheetW - item.w; x += step) {
+            const test = { x, y, w: item.w, h: item.h };
+            if (!otherItems.some(o => rectsOverlap(test, o))) {
+                return { x, y, valid: true };
+            }
+        }
+    }
+    return { x: item.x, y: item.y, valid: false };
+}
+
+function getSvgMouseCoords(svgElem, clientX, clientY) {
+    const pt = svgElem.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const ctm = svgElem.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    const transformed = pt.matrixTransform(ctm.inverse());
+    return { x: transformed.x, y: transformed.y };
+}
+
+// =========================================================
+// RENDERIZADO VISUAL Y PLANOS DE CORTE INTERACTIVOS
 // =========================================================
 
 function renderFinalResults(projectName, groupedPrograms) {
     const container = document.getElementById('results-container');
     let html = `
-        <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div style="font-size: 12px;">
                 <span>PROYECTO: <strong>${projectName.toUpperCase()}</strong></span>
+                <span style="margin-left: 14px; font-size: 10px; color: #e06b00;">[ARRASTRA LAS PIEZAS PARA MOVERLAS O CAMBIARLAS DE CHAPA • CLIC DERECHO PARA GIRAR 90°]</span>
             </div>
             <button id="btn-print-report" class="btn-app" style="background-color: #b35500; color: #ffffff;">IMPRIMIR PLANOS NESTING (A4)</button>
         </div>
@@ -881,8 +986,8 @@ function renderFinalResults(projectName, groupedPrograms) {
 
     let programCounter = 1;
 
-    groupedPrograms.forEach((group) => {
-        let pName = `P${programCounter++} - ${projectName.toUpperCase()}`;
+    groupedPrograms.forEach((group, progIdx) => {
+        let pName = `P${programCounter++} - ${projectName.toUpperCase()} (${group.sheet.desc.toUpperCase()})`;
         let sheet = group.sheet;
         let sheetW = sheet.width;  
         let sheetH = sheet.height; 
@@ -913,15 +1018,15 @@ function renderFinalResults(projectName, groupedPrograms) {
                     <div style="position: relative;">
                         <div style="font-size: 11px; font-weight: bold; color: #a5a5b5; margin-bottom: 8px;">${pName}</div>
                         
-                        <svg viewBox="0 0 ${sheetW} ${sheetH}" style="width: 100%; height: auto; max-height: 380px; display: block;">
+                        <svg class="sheet-svg-canvas" data-prog-idx="${progIdx}" viewBox="0 0 ${sheetW} ${sheetH}" style="width: 100%; height: auto; max-height: 380px; display: block;">
                             <rect x="0" y="0" width="${sheetW}" height="${sheetH}" fill="#14141c" stroke="#3a3a4c" stroke-width="2"/>
 
-                            ${sheet.placedItems.map(it => {
+                            ${sheet.placedItems.map((it, itemIdx) => {
                                 let color = getPartColor(it.name);
                                 return `
-                                    <g>
+                                    <g class="draggable-part" data-prog-idx="${progIdx}" data-item-idx="${itemIdx}">
                                         <rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" fill="${color}" stroke="#121217" stroke-width="1.5"/>
-                                        <text x="${it.x + it.w/2}" y="${it.y + it.h/2}" fill="#ffffff" font-size="${Math.min(it.w, it.h) * 0.28}" font-weight="bold" text-anchor="middle" dominant-baseline="middle" style="text-shadow: 0 1px 2px rgba(0,0,0,0.8);">${it.name.toUpperCase()}</text>
+                                        <text x="${it.x + it.w/2}" y="${it.y + it.h/2}" fill="#ffffff" font-size="${Math.min(it.w, it.h) * 0.25}" font-weight="bold" text-anchor="middle" dominant-baseline="middle" style="pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,0.8);">${it.name.toUpperCase()}</text>
                                     </g>
                                 `;
                             }).join('')}
@@ -940,7 +1045,9 @@ function renderFinalResults(projectName, groupedPrograms) {
                                 </tr>
                             </thead>
                             <tbody>
-                                ${Object.values(summaryPartsMap).map(p => `
+                                ${Object.values(summaryPartsMap).length === 0 
+                                    ? `<tr><td colspan="4" style="padding: 10px; text-align: center; color: #616170;">CHAPA VACÍA</td></tr>`
+                                    : Object.values(summaryPartsMap).map(p => `
                                     <tr>
                                         <td style="padding: 8px; border: 1px solid #2e2e3e; font-weight: bold; color: #ffffff;">${p.name.toUpperCase()}</td>
                                         <td style="padding: 8px; border: 1px solid #2e2e3e; text-align: center; color: #c2c2d0;">${p.qty}</td>
@@ -981,7 +1088,253 @@ function renderFinalResults(projectName, groupedPrograms) {
     if (printBtn) {
         printBtn.addEventListener('click', () => window.print());
     }
+
+    attachInteractiveSheetEvents();
 }
+
+// =========================================================
+// EVENTOS DE ARRASTRE ENTRE CHAPAS Y MENÚ CONTEXTUAL
+// =========================================================
+
+function attachInteractiveSheetEvents() {
+    const contextMenu = document.getElementById('part-context-menu');
+
+    document.querySelectorAll('.draggable-part').forEach(partGroup => {
+        // Iniciar arrastre (Agarrar)
+        partGroup.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return; // Solo clic izquierdo
+            e.preventDefault();
+            e.stopPropagation();
+            contextMenu.style.display = 'none';
+
+            const progIdx = parseInt(partGroup.getAttribute('data-prog-idx'));
+            const itemIdx = parseInt(partGroup.getAttribute('data-item-idx'));
+            const svgElem = partGroup.closest('svg');
+            const item = currentProgramsState[progIdx].sheet.placedItems[itemIdx];
+
+            const mousePos = getSvgMouseCoords(svgElem, e.clientX, e.clientY);
+
+            // Crear ghost visual flotante para poder arrastrar incluso hacia otras chapas
+            const ghost = document.createElement('div');
+            ghost.style.position = 'fixed';
+            ghost.style.pointerEvents = 'none';
+            ghost.style.background = getPartColor(item.name);
+            ghost.style.border = '2px solid #ffffff';
+            ghost.style.color = '#ffffff';
+            ghost.style.fontSize = '11px';
+            ghost.style.fontWeight = 'bold';
+            ghost.style.padding = '6px 10px';
+            ghost.style.borderRadius = '4px';
+            ghost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.6)';
+            ghost.style.zIndex = '10000';
+            ghost.style.left = (e.clientX + 12) + 'px';
+            ghost.style.top = (e.clientY + 12) + 'px';
+            ghost.textContent = `${item.name.toUpperCase()} (${item.w} x ${item.h})`;
+            document.body.appendChild(ghost);
+
+            partGroup.style.opacity = '0.35';
+
+            dragState = {
+                sourceProgIdx: progIdx,
+                sourceItemIdx: itemIdx,
+                item: { ...item },
+                offsetX: mousePos.x - item.x,
+                offsetY: mousePos.y - item.y,
+                ghostElem: ghost,
+                sourceGroupElem: partGroup
+            };
+        });
+
+        // Clic derecho -> Menú flotante para rotar 90°
+        partGroup.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const progIdx = parseInt(partGroup.getAttribute('data-prog-idx'));
+            const itemIdx = parseInt(partGroup.getAttribute('data-item-idx'));
+
+            contextTarget = { progIdx, itemIdx };
+
+            contextMenu.style.display = 'block';
+            const menuW = 185;
+            const menuH = 105;
+            const posX = (e.clientX + menuW > window.innerWidth) ? (e.clientX - menuW) : e.clientX;
+            const posY = (e.clientY + menuH > window.innerHeight) ? (e.clientY - menuH) : e.clientY;
+
+            contextMenu.style.left = posX + 'px';
+            contextMenu.style.top = posY + 'px';
+        });
+    });
+}
+
+// Movimiento global mientras se arrastra una pieza
+window.addEventListener('mousemove', (e) => {
+    if (!dragState) return;
+
+    dragState.ghostElem.style.left = (e.clientX + 12) + 'px';
+    dragState.ghostElem.style.top = (e.clientY + 12) + 'px';
+
+    // Detectar sobre qué chapa (SVG) está pasando el cursor
+    const elemUnder = document.elementFromPoint(e.clientX, e.clientY);
+    const targetSvg = elemUnder ? elemUnder.closest('.sheet-svg-canvas') : null;
+
+    if (targetSvg) {
+        const targetProgIdx = parseInt(targetSvg.getAttribute('data-prog-idx'));
+        const targetSheet = currentProgramsState[targetProgIdx].sheet;
+        const mousePos = getSvgMouseCoords(targetSvg, e.clientX, e.clientY);
+
+        const rawX = mousePos.x - dragState.offsetX;
+        const rawY = mousePos.y - dragState.offsetY;
+
+        const otherItems = targetSheet.placedItems.filter((_, idx) => 
+            !(targetProgIdx === dragState.sourceProgIdx && idx === dragState.sourceItemIdx)
+        );
+
+        const snapped = applyMagneticSnapAndCollision(
+            dragState.item,
+            rawX,
+            rawY,
+            targetSheet.width,
+            targetSheet.height,
+            otherItems
+        );
+
+        // Si está dentro de la misma chapa, actualiza en vivo la posición con efecto imán
+        if (targetProgIdx === dragState.sourceProgIdx) {
+            const rectElem = dragState.sourceGroupElem.querySelector('rect');
+            const textElem = dragState.sourceGroupElem.querySelector('text');
+            if (rectElem && textElem) {
+                rectElem.setAttribute('x', snapped.x);
+                rectElem.setAttribute('y', snapped.y);
+                rectElem.setAttribute('stroke', snapped.valid ? '#ffffff' : '#ff3333');
+                rectElem.setAttribute('stroke-width', '3');
+                textElem.setAttribute('x', snapped.x + dragState.item.w / 2);
+                textElem.setAttribute('y', snapped.y + dragState.item.h / 2);
+            }
+        }
+    }
+});
+
+// Soltar la pieza (Drop) en la misma chapa o en otra chapa distinta
+window.addEventListener('mouseup', (e) => {
+    if (!dragState) return;
+
+    if (dragState.ghostElem && dragState.ghostElem.parentNode) {
+        dragState.ghostElem.parentNode.removeChild(dragState.ghostElem);
+    }
+
+    const elemUnder = document.elementFromPoint(e.clientX, e.clientY);
+    const targetSvg = elemUnder ? elemUnder.closest('.sheet-svg-canvas') : null;
+
+    if (targetSvg) {
+        const targetProgIdx = parseInt(targetSvg.getAttribute('data-prog-idx'));
+        const sourceSheet = currentProgramsState[dragState.sourceProgIdx].sheet;
+        const targetSheet = currentProgramsState[targetProgIdx].sheet;
+
+        // Validar que la pieza quepa físicamente en la chapa destino
+        if (dragState.item.w <= targetSheet.width && dragState.item.h <= targetSheet.height) {
+            const mousePos = getSvgMouseCoords(targetSvg, e.clientX, e.clientY);
+            const rawX = mousePos.x - dragState.offsetX;
+            const rawY = mousePos.y - dragState.offsetY;
+
+            const otherItems = targetSheet.placedItems.filter((_, idx) => 
+                !(targetProgIdx === dragState.sourceProgIdx && idx === dragState.sourceItemIdx)
+            );
+
+            let snapped = applyMagneticSnapAndCollision(
+                dragState.item,
+                rawX,
+                rawY,
+                targetSheet.width,
+                targetSheet.height,
+                otherItems
+            );
+
+            // Si se soltó encima de otra pieza en una chapa nueva, buscar hueco libre automático
+            if (!snapped.valid && targetProgIdx !== dragState.sourceProgIdx) {
+                snapped = findFreeSpotForItem(dragState.item, targetSheet.width, targetSheet.height, otherItems);
+            }
+
+            if (snapped.valid) {
+                // Quitar de la chapa origen
+                const [movedItem] = sourceSheet.placedItems.splice(dragState.sourceItemIdx, 1);
+                movedItem.x = snapped.x;
+                movedItem.y = snapped.y;
+
+                // Insertar en la chapa destino
+                targetSheet.placedItems.push(movedItem);
+            }
+        } else {
+            alert(`LA PIEZA (${dragState.item.w} x ${dragState.item.h} mm) NO CABE EN LA CHAPA DESTINO (${targetSheet.width} x ${targetSheet.height} mm).`);
+        }
+    }
+
+    dragState = null;
+    renderFinalResults(currentProjectNameState, currentProgramsState);
+});
+
+// Cerrar menú contextual al hacer clic fuera
+window.addEventListener('click', (e) => {
+    const contextMenu = document.getElementById('part-context-menu');
+    if (contextMenu && !contextMenu.contains(e.target)) {
+        contextMenu.style.display = 'none';
+    }
+});
+
+// Rotar pieza de a 90 grados (Horario / Antihorario)
+function rotateContextPart() {
+    if (!contextTarget) return;
+    const { progIdx, itemIdx } = contextTarget;
+    const sheet = currentProgramsState[progIdx].sheet;
+    const item = sheet.placedItems[itemIdx];
+
+    const newW = item.h;
+    const newH = item.w;
+
+    if (newW > sheet.width || newH > sheet.height) {
+        alert(`NO SE PUEDE GIRAR: LA PIEZA GIRADA (${newW} x ${newH} mm) EXCEDE LA CHAPA (${sheet.width} x ${sheet.height} mm).`);
+        return;
+    }
+
+    const otherItems = sheet.placedItems.filter((_, idx) => idx !== itemIdx);
+    const tempRotated = { ...item, w: newW, h: newH };
+
+    // Intentar mantener su esquina superior izquierda (con imán y ajuste a bordes de chapa)
+    let result = applyMagneticSnapAndCollision(tempRotated, item.x, item.y, sheet.width, sheet.height, otherItems);
+
+    // Si al girar colisiona con una pieza vecina, buscar el espacio libre más cercano
+    if (!result.valid) {
+        result = findFreeSpotForItem(tempRotated, sheet.width, sheet.height, otherItems);
+    }
+
+    if (result.valid) {
+        item.w = newW;
+        item.h = newH;
+        item.x = result.x;
+        item.y = result.y;
+        renderFinalResults(currentProjectNameState, currentProgramsState);
+    } else {
+        alert('NO HAY ESPACIO LIBRE SUFICIENTE EN ESTA CHAPA PARA GIRAR LA PIEZA SIN COLISIONAR.');
+    }
+}
+
+document.getElementById('ctx-rotate-cw').addEventListener('click', () => {
+    rotateContextPart();
+    document.getElementById('part-context-menu').style.display = 'none';
+});
+
+document.getElementById('ctx-rotate-ccw').addEventListener('click', () => {
+    rotateContextPart();
+    document.getElementById('part-context-menu').style.display = 'none';
+});
+
+document.getElementById('ctx-delete-part').addEventListener('click', () => {
+    if (!contextTarget) return;
+    const { progIdx, itemIdx } = contextTarget;
+    currentProgramsState[progIdx].sheet.placedItems.splice(itemIdx, 1);
+    document.getElementById('part-context-menu').style.display = 'none';
+    renderFinalResults(currentProjectNameState, currentProgramsState);
+});
 
 window.addEventListener('DOMContentLoaded', async () => {
     await populateSavedProjectsDropdown();
