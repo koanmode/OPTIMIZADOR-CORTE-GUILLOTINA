@@ -445,9 +445,9 @@
 
 ---
 
-### 2. `optimizer.js` (Completo)
+### `optimizer.js`
 
-```javascript:optimizer.js
+```javascript
 // =========================================================
 // DATAWAVES GUILLOTINE OPTIMIZER 2D - MOTOR POR BLOQUES/TIRAS
 // COLISIÓN SÓLIDA, IMÁN DE CONTACTO Y FANTASMA FL STUDIO
@@ -1984,8 +1984,6 @@ function rotateContextPart() {
     }
 
     const otherItems = sheet.placedItems.filter((_, idx) => idx !== itemIdx);
-    const tempRotated = { ...item, w: newW, h: newH };
-
     const testRect = { x: item.x, y: item.y, w: newW, h: newH };
     const hasCollision = otherItems.some(o => rectsOverlap(testRect, o));
 
