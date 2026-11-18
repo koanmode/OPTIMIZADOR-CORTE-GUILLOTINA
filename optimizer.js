@@ -177,7 +177,7 @@ document.getElementById('active-sheet-height').addEventListener('change', (e) =>
 });
 
 // =========================================================
-// SUPABASE Y PERSISTENCIA
+// SUPABASE Y PERSISTENCIA (TABLA: guillotine_projects)
 // =========================================================
 
 async function populateSavedProjectsDropdown(keepSelected = true) {
@@ -187,7 +187,7 @@ async function populateSavedProjectsDropdown(keepSelected = true) {
     const previousValue = select.value;
 
     const { data, error } = await supabaseClient
-        .from('projects')
+        .from('guillotine_projects')
         .select('doc_name')
         .order('updated_at', { ascending: false });
 
@@ -216,8 +216,8 @@ async function populateSavedProjectsDropdown(keepSelected = true) {
 
 function initRealtimeSync() {
     supabaseClient
-        .channel('public:projects')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'projects' }, () => {
+        .channel('public:guillotine_projects')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'guillotine_projects' }, () => {
             populateSavedProjectsDropdown(true);
         })
         .subscribe();
@@ -273,7 +273,7 @@ document.getElementById('saved-projects-select').addEventListener('change', asyn
 
 async function loadProjectData(selectedDoc) {
     const { data, error } = await supabaseClient
-        .from('projects')
+        .from('guillotine_projects')
         .select('*')
         .eq('doc_name', selectedDoc)
         .single();
@@ -337,7 +337,7 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
     }
 
     const { data: existing } = await supabaseClient
-        .from('projects')
+        .from('guillotine_projects')
         .select('doc_name')
         .eq('doc_name', docName)
         .single();
@@ -355,7 +355,7 @@ document.getElementById('btn-save-project').addEventListener('click', async () =
         updated_at: new Date().toISOString()
     };
 
-    const { error } = await supabaseClient.from('projects').insert([projectData]);
+    const { error } = await supabaseClient.from('guillotine_projects').insert([projectData]);
 
     if (error) {
         alert('ERROR AL GUARDAR EN LA NUBE: ' + error.message);
@@ -384,7 +384,7 @@ document.getElementById('btn-update-project').addEventListener('click', async ()
     if (!window.confirm('¿ACTUALIZAR ESTE REGISTRO EN LA NUBE?')) return;
 
     if (currentLoadedId !== docName) {
-        await supabaseClient.from('projects').delete().eq('doc_name', currentLoadedId);
+        await supabaseClient.from('guillotine_projects').delete().eq('doc_name', currentLoadedId);
     }
 
     const projectData = {
@@ -395,7 +395,7 @@ document.getElementById('btn-update-project').addEventListener('click', async ()
         updated_at: new Date().toISOString()
     };
 
-    const { error } = await supabaseClient.from('projects').upsert([projectData]);
+    const { error } = await supabaseClient.from('guillotine_projects').upsert([projectData]);
 
     if (error) {
         alert('ERROR AL ACTUALIZAR: ' + error.message);
@@ -416,7 +416,7 @@ document.getElementById('btn-delete-project').addEventListener('click', async ()
 
     if (!window.confirm(`¿ELIMINAR "${selectedDoc}" DE LA NUBE PARA TODOS?`)) return;
 
-    const { error } = await supabaseClient.from('projects').delete().eq('doc_name', selectedDoc);
+    const { error } = await supabaseClient.from('guillotine_projects').delete().eq('doc_name', selectedDoc);
 
     if (error) {
         alert('ERROR AL ELIMINAR: ' + error.message);
@@ -439,7 +439,7 @@ document.getElementById('btn-export-project').addEventListener('click', async ()
     const selectedDoc = document.getElementById('saved-projects-select').value;
     if (!selectedDoc) return;
 
-    const { data, error } = await supabaseClient.from('projects').select('*').eq('doc_name', selectedDoc).single();
+    const { data, error } = await supabaseClient.from('guillotine_projects').select('*').eq('doc_name', selectedDoc).single();
     if (error || !data) return;
 
     const exportObject = {
@@ -487,7 +487,7 @@ document.getElementById('import-file-input').addEventListener('change', function
                 updated_at: new Date().toISOString()
             };
 
-            const { error } = await supabaseClient.from('projects').upsert([projectData]);
+            const { error } = await supabaseClient.from('guillotine_projects').upsert([projectData]);
             if (error) {
                 alert('ERROR AL SUBIR: ' + error.message);
                 return;
