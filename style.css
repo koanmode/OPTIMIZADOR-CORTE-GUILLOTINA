@@ -49,7 +49,7 @@ input::placeholder {
 @media print {
     @page { size: A4 landscape; margin: 10mm; }
     body { background: #ffffff !important; color: #000000 !important; }
-    header, .card:not(#results-card), #btn-optimize, #btn-add-sheet, #sheets-tabs-container, button { display: none !important; }
+    header, .card:not(#results-card), #btn-optimize, #btn-add-sheet, #sheets-tabs-container, button, #drag-ghost-overlay { display: none !important; }
     #results-card { border: none !important; background: #ffffff !important; padding: 0 !important; margin: 0 !important; }
     #results-card * { color: #000000 !important; }
     .program-card { background: #ffffff !important; border: 1px solid #000000 !important; page-break-after: always; margin-bottom: 0 !important; padding: 10px !important; box-shadow: none !important; }
