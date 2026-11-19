@@ -159,6 +159,40 @@
             background: rgba(255, 77, 77, 0.15);
         }
 
+        /* BOTÓN CANDADO POR CHAPA */
+        .sheet-lock-btn {
+            background: #23232c;
+            border: 1px solid #333342;
+            color: #c2c2d0;
+            border-radius: 4px;
+            width: 30px;
+            height: 30px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: border-color 0.2s, background-color 0.2s, color 0.2s;
+            padding: 0;
+        }
+        .sheet-lock-btn:hover {
+            border-color: #b35500;
+            background: #2a2a36;
+        }
+        .sheet-lock-btn.locked {
+            border-color: #b35500;
+            color: #e06b00;
+            background: rgba(179, 85, 0, 0.14);
+        }
+        .sheet-lock-btn svg {
+            width: 14px;
+            height: 14px;
+            stroke: currentColor;
+            stroke-width: 2;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
         /* INTERACCIÓN PIEZAS SVG Y SELECCIÓN MÚLTIPLE */
         .draggable-part {
             cursor: grab;
