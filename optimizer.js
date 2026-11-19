@@ -1,6 +1,6 @@
 // =========================================================
 // DATAWAVES GUILLOTINE OPTIMIZER 2D - MOTOR POR BLOQUES/TIRAS
-// COLISIÓN AL CONTACTO, IMÁN DE RETENCIÓN Y SELECCIÓN MÚLTIPLE
+// COLISIÓN 2D REAL, IMÁN DE RETENCIÓN FIRME Y FANTASMA FLOTANTE
 // =========================================================
 
 const SUPABASE_URL = 'https://sksanvauywgjxmxujicl.supabase.co';
@@ -27,9 +27,11 @@ let boxSelectState = null;
 let selectedItemsMap = {}; // Clave: "progIdx-itemIdx"
 let contextTarget = null;
 
-// Distancia de "tirón" en mm para despegar una pieza retenida por el imán de contacto
-const RELEASE_PULL_THRESHOLD = 30;
-const COLLISION_EPS = 0.05;
+// Distancia de "tirón" (en mm de chapa) para despegar la pieza una vez retenida por contacto
+const RELEASE_PULL_THRESHOLD = 55;
+const COLLISION_EPS = 0.01;
+// Escala visual leve al flotar fuera/sobre la interfaz (sin agrandar en exceso)
+const FLOAT_SCALE = 1.12;
 
 function getActiveSheet() {
     return sheetsList.find(s => s.id === activeSheetId) || sheetsList[0];
@@ -874,10 +876,10 @@ function cleanupRects(rects) {
 }
 
 // =========================================================
-// COLISIÓN AL CONTACTO E IMÁN DE RETENCIÓN (SIN ATRACCIÓN)
+// COLISIÓN 2D REAL E IMÁN DE RETENCIÓN FIRME
 // =========================================================
 
-function rectsOverlap(a, b) {
+function rectsOverlap2D(a, b) {
     return (
         a.x < b.x + b.w - COLLISION_EPS &&
         a.x + a.w > b.x + COLLISION_EPS &&
@@ -886,15 +888,25 @@ function rectsOverlap(a, b) {
     );
 }
 
+function hasAnyCollision2D(rect, sheetW, sheetH, obstacles) {
+    if (
+        rect.x < -COLLISION_EPS ||
+        rect.y < -COLLISION_EPS ||
+        rect.x + rect.w > sheetW + COLLISION_EPS ||
+        rect.y + rect.h > sheetH + COLLISION_EPS
+    ) {
+        return true;
+    }
+    return obstacles.some(obs => rectsOverlap2D(rect, obs));
+}
+
 /**
- * Calcula posición con:
- * - Cero atracción previa (nunca jala piezas a distancia).
- * - Colisión al tocar los bordes de la chapa o los bordes de otras piezas.
- * - Retención magnética en el punto de contacto: una vez pegada/detenida por contacto,
- *   mantiene la posición de contacto mientras el cursor no supere RELEASE_PULL_THRESHOLD,
- *   permitiendo soltarla si se tira más allá del umbral para pasar por encima si se desea.
+ * Avanza un bloque rectangular desde `currentPos` hacia `desiredPos` dentro de la chapa,
+ * deteniéndose exactamente al tocar los bordes o alguna pieza real (`obstacles`),
+ * y aplicando retención magnética (`RELEASE_PULL_THRESHOLD`) una vez pegado.
+ * No aplica ninguna atracción a distancia.
  */
-function resolveContactAndRetentionMagnet(baseItem, desiredX, desiredY, sheetW, sheetH, otherItems, magnetState) {
+function stepBlockWithContactAndMagnet(currentPos, desiredPos, blockW, blockH, sheetW, sheetH, obstacles, magnetState) {
     const state = magnetState ? { ...magnetState } : {
         heldX: false,
         heldXVal: null,
@@ -904,117 +916,153 @@ function resolveContactAndRetentionMagnet(baseItem, desiredX, desiredY, sheetW, 
         pullAnchorY: null
     };
 
-    // --- EJE X ---
-    let nextX = desiredX;
+    let targetX = desiredPos.x;
+    let targetY = desiredPos.y;
 
+    // Retención firme en X una vez pegado por contacto
     if (state.heldX) {
-        if (Math.abs(desiredX - state.pullAnchorX) >= RELEASE_PULL_THRESHOLD) {
+        if (Math.abs(desiredPos.x - state.pullAnchorX) < RELEASE_PULL_THRESHOLD) {
+            targetX = state.heldXVal;
+        } else {
             state.heldX = false;
             state.heldXVal = null;
             state.pullAnchorX = null;
-        } else {
-            nextX = state.heldXVal;
         }
     }
 
-    if (!state.heldX) {
-        // Colisión contra filo izquierdo y derecho de la chapa
-        if (nextX <= 0) {
-            nextX = 0;
-            state.heldX = true;
-            state.heldXVal = 0;
-            state.pullAnchorX = desiredX;
-        } else if (nextX + baseItem.w >= sheetW) {
-            nextX = sheetW - baseItem.w;
-            state.heldX = true;
-            state.heldXVal = nextX;
-            state.pullAnchorX = desiredX;
-        } else {
-            // Colisión al contacto con otras piezas en el eje X
-            const testX = { x: nextX, y: baseItem.y, w: baseItem.w, h: baseItem.h };
-            for (const other of otherItems) {
-                const verticalOverlap = (baseItem.y < other.y + other.h - COLLISION_EPS) &&
-                                      (baseItem.y + baseItem.h > other.y + COLLISION_EPS);
-                if (!verticalOverlap) continue;
-
-                if (rectsOverlap(testX, other)) {
-                    const contactX = (desiredX >= baseItem.x)
-                        ? (other.x - baseItem.w)
-                        : (other.x + other.w);
-                    if (contactX >= 0 && contactX + baseItem.w <= sheetW) {
-                        nextX = contactX;
-                        state.heldX = true;
-                        state.heldXVal = contactX;
-                        state.pullAnchorX = desiredX;
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    // --- EJE Y ---
-    let nextY = desiredY;
-
+    // Retención firme en Y una vez pegado por contacto
     if (state.heldY) {
-        if (Math.abs(desiredY - state.pullAnchorY) >= RELEASE_PULL_THRESHOLD) {
+        if (Math.abs(desiredPos.y - state.pullAnchorY) < RELEASE_PULL_THRESHOLD) {
+            targetY = state.heldYVal;
+        } else {
             state.heldY = false;
             state.heldYVal = null;
             state.pullAnchorY = null;
-        } else {
-            nextY = state.heldYVal;
         }
     }
 
-    if (!state.heldY) {
-        // Colisión contra filo superior e inferior de la chapa
-        if (nextY <= 0) {
-            nextY = 0;
-            state.heldY = true;
-            state.heldYVal = 0;
-            state.pullAnchorY = desiredY;
-        } else if (nextY + baseItem.h >= sheetH) {
-            nextY = sheetH - baseItem.h;
-            state.heldY = true;
-            state.heldYVal = nextY;
-            state.pullAnchorY = desiredY;
-        } else {
-            // Colisión al contacto con otras piezas en el eje Y
-            const testY = { x: nextX, y: nextY, w: baseItem.w, h: baseItem.h };
-            for (const other of otherItems) {
-                const horizontalOverlap = (nextX < other.x + other.w - COLLISION_EPS) &&
-                                        (nextX + baseItem.w > other.x + COLLISION_EPS);
-                if (!horizontalOverlap) continue;
+    let x = currentPos.x;
+    let y = currentPos.y;
 
-                if (rectsOverlap(testY, other)) {
-                    const contactY = (desiredY >= baseItem.y)
-                        ? (other.y - baseItem.h)
-                        : (other.y + other.h);
-                    if (contactY >= 0 && contactY + baseItem.h <= sheetH) {
-                        nextY = contactY;
-                        state.heldY = true;
-                        state.heldYVal = contactY;
-                        state.pullAnchorY = desiredY;
+    // Resolver movimiento en X buscando el tope real de contacto más cercano
+    const dx = targetX - x;
+    if (Math.abs(dx) > 0) {
+        let candidateX = Math.max(0, Math.min(sheetW - blockW, targetX));
+
+        if (dx > 0) {
+            // Mover hacia la derecha: tope máximo es sheetW - blockW o borde izquierdo de piezas que intersecten en Y
+            let limitX = candidateX;
+            for (const obs of obstacles) {
+                const overlapY = (y < obs.y + obs.h - COLLISION_EPS) && (y + blockH > obs.y + COLLISION_EPS);
+                if (overlapY && obs.x >= x + blockW - COLLISION_EPS) {
+                    const contactEdge = obs.x - blockW;
+                    if (contactEdge < limitX) {
+                        limitX = contactEdge;
                     }
-                    break;
                 }
+            }
+            if (limitX < candidateX || candidateX >= sheetW - blockW) {
+                x = Math.max(x, limitX);
+                state.heldX = true;
+                state.heldXVal = x;
+                if (state.pullAnchorX === null) state.pullAnchorX = desiredPos.x;
+            } else {
+                x = candidateX;
+            }
+        } else {
+            // Mover hacia la izquierda: tope mínimo es 0 o borde derecho de piezas que intersecten en Y
+            let limitX = candidateX;
+            for (const obs of obstacles) {
+                const overlapY = (y < obs.y + obs.h - COLLISION_EPS) && (y + blockH > obs.y + COLLISION_EPS);
+                if (overlapY && obs.x + obs.w <= x + COLLISION_EPS) {
+                    const contactEdge = obs.x + obs.w;
+                    if (contactEdge > limitX) {
+                        limitX = contactEdge;
+                    }
+                }
+            }
+            if (limitX > candidateX || candidateX <= 0) {
+                x = Math.min(x, limitX);
+                state.heldX = true;
+                state.heldXVal = x;
+                if (state.pullAnchorX === null) state.pullAnchorX = desiredPos.x;
+            } else {
+                x = candidateX;
             }
         }
     }
 
-    nextX = Math.max(0, Math.min(sheetW - baseItem.w, Math.round(nextX)));
-    nextY = Math.max(0, Math.min(sheetH - baseItem.h, Math.round(nextY)));
+    // Resolver movimiento en Y usando la X ya resuelta, comprobando solapamiento real en X
+    const dy = targetY - y;
+    if (Math.abs(dy) > 0) {
+        let candidateY = Math.max(0, Math.min(sheetH - blockH, targetY));
 
-    const finalRect = { x: nextX, y: nextY, w: baseItem.w, h: baseItem.h };
-    const collides = otherItems.some(o => rectsOverlap(finalRect, o));
-    const isHeld = state.heldX || state.heldY;
+        if (dy > 0) {
+            // Mover hacia abajo
+            let limitY = candidateY;
+            for (const obs of obstacles) {
+                const overlapX = (x < obs.x + obs.w - COLLISION_EPS) && (x + blockW > obs.x + COLLISION_EPS);
+                if (overlapX && obs.y >= y + blockH - COLLISION_EPS) {
+                    const contactEdge = obs.y - blockH;
+                    if (contactEdge < limitY) {
+                        limitY = contactEdge;
+                    }
+                }
+            }
+            if (limitY < candidateY || candidateY >= sheetH - blockH) {
+                y = Math.max(y, limitY);
+                state.heldY = true;
+                state.heldYVal = y;
+                if (state.pullAnchorY === null) state.pullAnchorY = desiredPos.y;
+            } else {
+                y = candidateY;
+            }
+        } else {
+            // Mover hacia arriba
+            let limitY = candidateY;
+            for (const obs of obstacles) {
+                const overlapX = (x < obs.x + obs.w - COLLISION_EPS) && (x + blockW > obs.x + COLLISION_EPS);
+                if (overlapX && obs.y + obs.h <= y + COLLISION_EPS) {
+                    const contactEdge = obs.y + obs.h;
+                    if (contactEdge > limitY) {
+                        limitY = contactEdge;
+                    }
+                }
+            }
+            if (limitY > candidateY || candidateY <= 0) {
+                y = Math.min(y, limitY);
+                state.heldY = true;
+                state.heldYVal = y;
+                if (state.pullAnchorY === null) state.pullAnchorY = desiredPos.y;
+            } else {
+                y = candidateY;
+            }
+        }
+    }
+
+    x = Math.max(0, Math.min(sheetW - blockW, Math.round(x)));
+    y = Math.max(0, Math.min(sheetH - blockH, Math.round(y)));
+
+    // Si tras soltar el imán se tiró con fuerza pasando por encima de una pieza, permitir el paso
+    // pero marcar colisión real 2D para que el borde avise y no permita soltar encima
+    if (!state.heldX && !state.heldY) {
+        const rawX = Math.max(0, Math.min(sheetW - blockW, Math.round(desiredPos.x)));
+        const rawY = Math.max(0, Math.min(sheetH - blockH, Math.round(desiredPos.y)));
+        const rawRect = { x: rawX, y: rawY, w: blockW, h: blockH };
+        if (obstacles.some(o => rectsOverlap2D(rawRect, o))) {
+            x = rawX;
+            y = rawY;
+        }
+    }
+
+    const collides = hasAnyCollision2D({ x, y, w: blockW, h: blockH }, sheetW, sheetH, obstacles);
 
     return {
-        x: nextX,
-        y: nextY,
+        x,
+        y,
         magnetState: state,
         collides,
-        isHeld
+        isHeld: state.heldX || state.heldY
     };
 }
 
@@ -1023,7 +1071,7 @@ function findFreeSpotForItem(item, sheetW, sheetH, otherItems) {
     for (let y = 0; y <= sheetH - item.h; y += step) {
         for (let x = 0; x <= sheetW - item.w; x += step) {
             const test = { x, y, w: item.w, h: item.h };
-            if (!otherItems.some(o => rectsOverlap(test, o))) {
+            if (!otherItems.some(o => rectsOverlap2D(test, o))) {
                 return { x, y, valid: true };
             }
         }
@@ -1039,6 +1087,22 @@ function getSvgMouseCoords(svgElem, clientX, clientY) {
     if (!ctm) return { x: 0, y: 0 };
     const transformed = pt.matrixTransform(ctm.inverse());
     return { x: transformed.x, y: transformed.y };
+}
+
+function getSheetSvgUnderCursor(clientX, clientY) {
+    const svgs = Array.from(document.querySelectorAll('.sheet-svg-canvas'));
+    for (const svg of svgs) {
+        const rect = svg.getBoundingClientRect();
+        if (
+            clientX >= rect.left &&
+            clientX <= rect.right &&
+            clientY >= rect.top &&
+            clientY <= rect.bottom
+        ) {
+            return svg;
+        }
+    }
+    return null;
 }
 
 // =========================================================
@@ -1169,7 +1233,7 @@ function renderFinalResults(projectName, groupedPrograms) {
 }
 
 // =========================================================
-// OVERLAY FLOTANTE PARA VISIBILIDAD ENTRE CHAPAS
+// FANTASMA FLOTANTE CERCA DEL CURSOR (FUERA / ENTRE CHAPAS)
 // =========================================================
 
 function getOrCreateDragOverlay() {
@@ -1187,7 +1251,7 @@ function getOrCreateDragOverlay() {
     return overlay;
 }
 
-function renderDragOverlay(referenceSvg, groupItems, deltaX, deltaY, collides, isHeld) {
+function renderFloatingCursorGhost(referenceSvg, groupItems, clientX, clientY, anchorOffsetPx) {
     const overlay = getOrCreateDragOverlay();
     if (!referenceSvg || !groupItems || groupItems.length === 0) {
         overlay.style.display = 'none';
@@ -1195,33 +1259,33 @@ function renderDragOverlay(referenceSvg, groupItems, deltaX, deltaY, collides, i
     }
 
     const ctm = referenceSvg.getScreenCTM();
-    if (!ctm) {
-        overlay.style.display = 'none';
-        return;
-    }
+    const scaleX = ctm?.a || 1;
+    const scaleY = ctm?.d || 1;
 
-    const scaleX = ctm.a || 1;
-    const scaleY = ctm.d || 1;
+    const primary = groupItems.find(g => g.itemIdx === dragState?.primaryItemIdx)?.item || groupItems[0].item;
+    const primaryWPx = Math.max(12, primary.w * scaleX * FLOAT_SCALE);
+    const primaryHPx = Math.max(12, primary.h * scaleY * FLOAT_SCALE);
+
+    // Anclar cerca del cursor sin volverse gigante ni quedar lejos
+    const clampedOffX = Math.max(-primaryWPx * 0.45, Math.min(primaryWPx * 0.45, anchorOffsetPx.x * FLOAT_SCALE));
+    const clampedOffY = Math.max(-primaryHPx * 0.45, Math.min(primaryHPx * 0.45, anchorOffsetPx.y * FLOAT_SCALE));
+
+    const baseLeft = clientX - clampedOffX;
+    const baseTop = clientY - clampedOffY;
 
     overlay.innerHTML = '';
     overlay.style.display = 'block';
 
     groupItems.forEach(g => {
-        const curX = g.item.x + deltaX;
-        const curY = g.item.y + deltaY;
-
-        const pt = referenceSvg.createSVGPoint();
-        pt.x = curX;
-        pt.y = curY;
-        const screenPt = pt.matrixTransform(ctm);
-
-        const wPx = Math.max(10, g.item.w * scaleX);
-        const hPx = Math.max(10, g.item.h * scaleY);
+        const relX = (g.item.x - primary.x) * scaleX * FLOAT_SCALE;
+        const relY = (g.item.y - primary.y) * scaleY * FLOAT_SCALE;
+        const wPx = Math.max(10, g.item.w * scaleX * FLOAT_SCALE);
+        const hPx = Math.max(10, g.item.h * scaleY * FLOAT_SCALE);
 
         const el = document.createElement('div');
         el.style.position = 'fixed';
-        el.style.left = `${screenPt.x}px`;
-        el.style.top = `${screenPt.y}px`;
+        el.style.left = `${baseLeft + relX}px`;
+        el.style.top = `${baseTop + relY}px`;
         el.style.width = `${wPx}px`;
         el.style.height = `${hPx}px`;
         el.style.backgroundColor = getPartColor(g.item.name);
@@ -1234,16 +1298,9 @@ function renderDragOverlay(referenceSvg, groupItems, deltaX, deltaY, collides, i
         el.style.fontWeight = '700';
         el.style.fontSize = `${Math.max(9, Math.min(wPx, hPx) * 0.25)}px`;
         el.style.textShadow = '0 1px 2px rgba(0,0,0,0.9)';
-        el.style.boxShadow = '0 8px 20px rgba(0,0,0,0.6)';
-
-        if (collides) {
-            el.style.border = '2.5px solid #ff3333';
-        } else if (isHeld) {
-            el.style.border = '2.5px solid #ffaa00';
-        } else {
-            el.style.border = '2px solid #ffffff';
-        }
-
+        el.style.border = '2px dashed #ffaa00';
+        el.style.borderRadius = '2px';
+        el.style.boxShadow = '0 8px 18px rgba(0,0,0,0.65)';
         el.textContent = g.item.name.toUpperCase();
         overlay.appendChild(el);
     });
@@ -1346,13 +1403,25 @@ function attachInteractiveSheetEvents() {
             const primaryItem = sheet.placedItems[itemIdx];
             const mousePos = getSvgMouseCoords(svgElem, e.clientX, e.clientY);
 
+            // Offset en píxeles respecto a la esquina superior izquierda del rectángulo en pantalla
+            const ctm = svgElem.getScreenCTM();
+            const ptOrigin = svgElem.createSVGPoint();
+            ptOrigin.x = primaryItem.x;
+            ptOrigin.y = primaryItem.y;
+            const screenOrigin = ptOrigin.matrixTransform(ctm);
+
             dragState = {
                 sourceProgIdx: progIdx,
                 primaryItemIdx: itemIdx,
                 groupItems: groupItems,
                 offsetX: mousePos.x - primaryItem.x,
                 offsetY: mousePos.y - primaryItem.y,
+                screenAnchorOffset: {
+                    x: e.clientX - screenOrigin.x,
+                    y: e.clientY - screenOrigin.y
+                },
                 sourceSvgElem: svgElem,
+                currentSimPos: { x: primaryItem.x, y: primaryItem.y },
                 magnetState: null
             };
 
@@ -1405,38 +1474,49 @@ window.addEventListener('mousemove', (e) => {
 
     if (!dragState) return;
 
-    const elemUnder = document.elementFromPoint(e.clientX, e.clientY);
-    const targetSvg = elemUnder ? elemUnder.closest('.sheet-svg-canvas') : null;
-    const activeSvg = targetSvg || dragState.sourceSvgElem;
-    const targetProgIdx = activeSvg ? parseInt(activeSvg.getAttribute('data-prog-idx')) : dragState.sourceProgIdx;
-    const targetSheet = currentProgramsState[targetProgIdx]?.sheet;
+    const targetSvg = getSheetSvgUnderCursor(e.clientX, e.clientY);
 
-    if (!activeSvg || !targetSheet) {
-        clearDragOverlay();
+    // Si el cursor está fuera de cualquier chapa, mostrar fantasma flotante cerca del cursor sin colisionar con nada
+    if (!targetSvg) {
+        renderFloatingCursorGhost(
+            dragState.sourceSvgElem,
+            dragState.groupItems,
+            e.clientX,
+            e.clientY,
+            dragState.screenAnchorOffset
+        );
         return;
     }
 
-    const mousePos = getSvgMouseCoords(activeSvg, e.clientX, e.clientY);
-    const primaryOrig = dragState.groupItems.find(g => g.itemIdx === dragState.primaryItemIdx)?.item || dragState.groupItems[0].item;
+    clearDragOverlay();
 
-    const desiredPrimaryX = mousePos.x - dragState.offsetX;
-    const desiredPrimaryY = mousePos.y - dragState.offsetY;
+    const targetProgIdx = parseInt(targetSvg.getAttribute('data-prog-idx'));
+    const targetSheet = currentProgramsState[targetProgIdx]?.sheet;
+    if (!targetSheet) return;
+
+    const mousePos = getSvgMouseCoords(targetSvg, e.clientX, e.clientY);
+    const primaryOrig = dragState.groupItems.find(g => g.itemIdx === dragState.primaryItemIdx)?.item || dragState.groupItems[0].item;
 
     const groupIndices = dragState.groupItems.map(g => g.itemIdx);
     const otherItems = targetSheet.placedItems.filter((_, idx) =>
         !(dragState.sourceProgIdx === targetProgIdx && groupIndices.includes(idx))
     );
 
-    const resolved = resolveContactAndRetentionMagnet(
-        primaryOrig,
-        desiredPrimaryX,
-        desiredPrimaryY,
+    const desiredPrimaryX = mousePos.x - dragState.offsetX;
+    const desiredPrimaryY = mousePos.y - dragState.offsetY;
+
+    const resolved = stepBlockWithContactAndMagnet(
+        dragState.currentSimPos,
+        { x: desiredPrimaryX, y: desiredPrimaryY },
+        primaryOrig.w,
+        primaryOrig.h,
         targetSheet.width,
         targetSheet.height,
         otherItems,
         dragState.magnetState
     );
 
+    dragState.currentSimPos = { x: resolved.x, y: resolved.y };
     dragState.magnetState = resolved.magnetState;
 
     const deltaX = resolved.x - primaryOrig.x;
@@ -1448,45 +1528,31 @@ window.addEventListener('mousemove', (e) => {
         const newY = g.item.y + deltaY;
         const testRect = { x: newX, y: newY, w: g.item.w, h: g.item.h };
 
-        if (newX < 0 || newY < 0 || newX + g.item.w > targetSheet.width || newY + g.item.h > targetSheet.height) {
-            groupValid = false;
-        }
-        if (otherItems.some(o => rectsOverlap(testRect, o))) {
+        if (hasAnyCollision2D(testRect, targetSheet.width, targetSheet.height, otherItems)) {
             groupValid = false;
         }
         return { itemIdx: g.itemIdx, x: newX, y: newY, item: g.item };
     });
 
-    if (targetSvg) {
-        targetSvg.querySelectorAll('.draggable-part').forEach(node => {
-            const pIdx = parseInt(node.getAttribute('data-prog-idx'));
-            const iIdx = parseInt(node.getAttribute('data-item-idx'));
-            const match = dragState.groupItems.find(g => g.itemIdx === iIdx && pIdx === dragState.sourceProgIdx);
+    targetSvg.querySelectorAll('.draggable-part').forEach(node => {
+        const pIdx = parseInt(node.getAttribute('data-prog-idx'));
+        const iIdx = parseInt(node.getAttribute('data-item-idx'));
+        const match = dragState.groupItems.find(g => g.itemIdx === iIdx && pIdx === dragState.sourceProgIdx);
 
-            if (match) {
-                const foundPos = testedGroupPositions.find(tp => tp.itemIdx === iIdx);
-                const rectElem = node.querySelector('rect');
-                const textElem = node.querySelector('text');
-                if (rectElem && textElem && foundPos) {
-                    rectElem.setAttribute('x', foundPos.x);
-                    rectElem.setAttribute('y', foundPos.y);
-                    rectElem.setAttribute('stroke', groupValid ? (resolved.isHeld ? '#ffaa00' : '#ffffff') : '#ff3333');
-                    rectElem.setAttribute('stroke-width', groupValid ? '3' : '3.5');
-                    textElem.setAttribute('x', foundPos.x + match.item.w / 2);
-                    textElem.setAttribute('y', foundPos.y + match.item.h / 2);
-                }
+        if (match) {
+            const foundPos = testedGroupPositions.find(tp => tp.itemIdx === iIdx);
+            const rectElem = node.querySelector('rect');
+            const textElem = node.querySelector('text');
+            if (rectElem && textElem && foundPos) {
+                rectElem.setAttribute('x', foundPos.x);
+                rectElem.setAttribute('y', foundPos.y);
+                rectElem.setAttribute('stroke', groupValid ? (resolved.isHeld ? '#ffaa00' : '#ffffff') : '#ff3333');
+                rectElem.setAttribute('stroke-width', groupValid ? '3' : '3.5');
+                textElem.setAttribute('x', foundPos.x + match.item.w / 2);
+                textElem.setAttribute('y', foundPos.y + match.item.h / 2);
             }
-        });
-    }
-
-    renderDragOverlay(
-        activeSvg,
-        dragState.groupItems,
-        deltaX,
-        deltaY,
-        !groupValid,
-        resolved.isHeld
-    );
+        }
+    });
 });
 
 // Soltar (Mouseup global)
@@ -1504,72 +1570,53 @@ window.addEventListener('mouseup', (e) => {
 
     clearDragOverlay();
 
-    const elemUnder = document.elementFromPoint(e.clientX, e.clientY);
-    const targetSvg = elemUnder ? elemUnder.closest('.sheet-svg-canvas') : null;
+    const targetSvg = getSheetSvgUnderCursor(e.clientX, e.clientY);
 
-    if (targetSvg) {
-        const targetProgIdx = parseInt(targetSvg.getAttribute('data-prog-idx'));
-        const sourceSheet = currentProgramsState[dragState.sourceProgIdx]?.sheet;
-        const targetSheet = currentProgramsState[targetProgIdx]?.sheet;
+    // Si suelta fuera de una chapa válida, no aplica cambios y vuelve a su posición original
+    if (!targetSvg) {
+        dragState = null;
+        renderFinalResults(currentProjectNameState, currentProgramsState);
+        return;
+    }
 
-        if (sourceSheet && targetSheet) {
-            const mousePos = getSvgMouseCoords(targetSvg, e.clientX, e.clientY);
-            const primaryOrig = dragState.groupItems.find(g => g.itemIdx === dragState.primaryItemIdx)?.item || dragState.groupItems[0].item;
+    const targetProgIdx = parseInt(targetSvg.getAttribute('data-prog-idx'));
+    const sourceSheet = currentProgramsState[dragState.sourceProgIdx]?.sheet;
+    const targetSheet = currentProgramsState[targetProgIdx]?.sheet;
 
-            const desiredPrimaryX = mousePos.x - dragState.offsetX;
-            const desiredPrimaryY = mousePos.y - dragState.offsetY;
+    if (sourceSheet && targetSheet) {
+        const primaryOrig = dragState.groupItems.find(g => g.itemIdx === dragState.primaryItemIdx)?.item || dragState.groupItems[0].item;
+        const groupIndices = dragState.groupItems.map(g => g.itemIdx);
+        const otherItems = targetSheet.placedItems.filter((_, idx) =>
+            !(dragState.sourceProgIdx === targetProgIdx && groupIndices.includes(idx))
+        );
 
-            const groupIndices = dragState.groupItems.map(g => g.itemIdx);
-            const otherItems = targetSheet.placedItems.filter((_, idx) =>
-                !(dragState.sourceProgIdx === targetProgIdx && groupIndices.includes(idx))
-            );
+        const finalDeltaX = dragState.currentSimPos.x - primaryOrig.x;
+        const finalDeltaY = dragState.currentSimPos.y - primaryOrig.y;
 
-            const resolved = resolveContactAndRetentionMagnet(
-                primaryOrig,
-                desiredPrimaryX,
-                desiredPrimaryY,
-                targetSheet.width,
-                targetSheet.height,
-                otherItems,
-                dragState.magnetState
-            );
-
-            const finalDeltaX = resolved.x - primaryOrig.x;
-            const finalDeltaY = resolved.y - primaryOrig.y;
-
-            let canApplyGroup = true;
-            let finalGroupCoords = dragState.groupItems.map(g => {
-                const nx = g.item.x + finalDeltaX;
-                const ny = g.item.y + finalDeltaY;
-                if (nx < 0 || ny < 0 || nx + g.item.w > targetSheet.width || ny + g.item.h > targetSheet.height) {
-                    canApplyGroup = false;
-                }
-                return { itemIdx: g.itemIdx, x: nx, y: ny, originalItem: g.item };
-            });
-
-            finalGroupCoords.forEach(fg => {
-                const testRect = { x: fg.x, y: fg.y, w: fg.originalItem.w, h: fg.originalItem.h };
-                if (otherItems.some(o => rectsOverlap(testRect, o))) {
-                    canApplyGroup = false;
-                }
-            });
-
-            if (canApplyGroup) {
-                const sortedItems = [...dragState.groupItems].sort((a, b) => b.itemIdx - a.itemIdx);
-                let movedItems = [];
-
-                sortedItems.forEach(g => {
-                    const [it] = sourceSheet.placedItems.splice(g.itemIdx, 1);
-                    const coord = finalGroupCoords.find(fc => fc.itemIdx === g.itemIdx);
-                    it.x = coord.x;
-                    it.y = coord.y;
-                    movedItems.unshift(it);
-                });
-
-                targetSheet.placedItems.push(...movedItems);
-            } else {
-                alert('MOVIMIENTO INVÁLIDO: EL GRUPO SUPERA LOS LÍMITES DE LA CHAPA O COLISIONA CON OTRAS PIEZAS.');
+        let canApplyGroup = true;
+        let finalGroupCoords = dragState.groupItems.map(g => {
+            const nx = g.item.x + finalDeltaX;
+            const ny = g.item.y + finalDeltaY;
+            const testRect = { x: nx, y: ny, w: g.item.w, h: g.item.h };
+            if (hasAnyCollision2D(testRect, targetSheet.width, targetSheet.height, otherItems)) {
+                canApplyGroup = false;
             }
+            return { itemIdx: g.itemIdx, x: nx, y: ny, originalItem: g.item };
+        });
+
+        if (canApplyGroup) {
+            const sortedItems = [...dragState.groupItems].sort((a, b) => b.itemIdx - a.itemIdx);
+            let movedItems = [];
+
+            sortedItems.forEach(g => {
+                const [it] = sourceSheet.placedItems.splice(g.itemIdx, 1);
+                const coord = finalGroupCoords.find(fc => fc.itemIdx === g.itemIdx);
+                it.x = coord.x;
+                it.y = coord.y;
+                movedItems.unshift(it);
+            });
+
+            targetSheet.placedItems.push(...movedItems);
         }
     }
 
@@ -1603,12 +1650,25 @@ function rotateContextPart() {
     const otherItems = sheet.placedItems.filter((_, idx) => idx !== itemIdx);
     const tempRotated = { ...item, w: newW, h: newH };
 
-    let result = resolveContactAndRetentionMagnet(tempRotated, item.x, item.y, sheet.width, sheet.height, otherItems, null);
+    let result = stepBlockWithContactAndMagnet(
+        { x: item.x, y: item.y },
+        { x: item.x, y: item.y },
+        newW,
+        newH,
+        sheet.width,
+        sheet.height,
+        otherItems,
+        null
+    );
+
     if (result.collides) {
-        result = findFreeSpotForItem(tempRotated, sheet.width, sheet.height, otherItems);
+        const free = findFreeSpotForItem(tempRotated, sheet.width, sheet.height, otherItems);
+        if (free.valid) {
+            result = { x: free.x, y: free.y, collides: false };
+        }
     }
 
-    if (!result.collides || result.valid) {
+    if (!result.collides) {
         item.w = newW;
         item.h = newH;
         item.x = result.x;
